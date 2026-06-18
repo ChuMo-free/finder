@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>非遗地址坐标查找工具</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部标题 -->
+        <header class="header">
+            <h1>🏛️ 非遗地址坐标查找工具</h1>
+            <p class="subtitle">Excel上传 → 网络搜索地址 → 人工审核 → 高德坐标转换 → 导出结果</p>
+        </header>
+
+        <!-- 步骤指示器 -->
+        <div class="steps">
+            <div class="step active" id="step-1">
+                <div class="step-number">1</div>
+                <div class="step-label">上传Excel</div>
+            </div>
+            <div class="step-line"></div>
+            <div class="step" id="step-2">
+                <div class="step-number">2</div>
+                <div class="step-label">字段映射</div>
+            </div>
+            <div class="step-line"></div>
+            <div class="step" id="step-3">
+                <div class="step-number">3</div>
+                <div class="step-label">处理中</div>
+            </div>
+            <div class="step-line"></div>
+            <div class="step" id="step-4">
+                <div class="step-number">4</div>
+                <div class="step-label">完成导出</div>
+            </div>
+        </div>
+
+        <!-- 步骤1：上传区域 -->
+        <div class="panel" id="panel-upload">
+            <h2>📁 上传Excel文件</h2>
+            <div class="upload-area" id="upload-area">
+                <div class="upload-icon">📊</div>
+                <p class="upload-text">拖拽Excel文件到此处，或点击选择文件</p>
+                <p class="upload-hint">支持 .xlsx / .xls 格式，最大50MB</p>
+                <input type="file" id="file-input" accept=".xlsx,.xls" hidden>
+                <button class="btn btn-primary" id="btn-select-file">选择文件</button>
+            </div>
+            <div class="file-info" id="file-info" style="display:none;">
+                <span class="file-name" id="file-name"></span>
+                <span class="file-size" id="file-size"></span>
+                <span class="file-rows" id="file-rows"></span>
+            </div>
+        </div>
+
+        <!-- 步骤2：字段映射和API配置 -->
+        <div class="panel" id="panel-mapping" style="display:none;">
+            <h2>⚙️ 字段映射与API配置</h2>
+            
+            <div class="mapping-section">
+                <h3>字段映射</h3>
+                <p class="section-desc">请选择Excel中对应的字段列</p>
+                
+                <div class="form-group">
+                    <label>项目名称字段 <span class="required">*</span></label>
+                    <select id="field-name">
+                        <option value="">请选择...</option>
+                    </select>
+                    <span class="field-hint">非遗项目名称，用于搜索地址</span>
+                </div>
+            </div>
+
+            <div class="mapping-section">
+                <h3>高德地图API配置</h3>
+                <p class="section-desc">请输入您的高德地图Web服务API Key</p>
+                
+                <div class="form-group">
+                    <label>高德API Key <span class="required">*</span></label>
+                    <input type="text" id="amap-key" placeholder="请输入高德地图API Key">
+                    <span class="field-hint">
+                        <a href="https://lbs.amap.com/api/webservice/guide/create-project/get-key" target="_blank">
+                            🔗 如何获取API Key？
+                        </a>
+                    </span>
+                </div>
+            </div>
+
+            <div class="button-row">
+                <button class="btn btn-secondary" id="btn-back-upload">返回上一步</button>
+                <button class="btn btn-primary" id="btn-start">开始处理</button>
+            </div>
+        </div>
+
+        <!-- 步骤3：监控面板 -->
+        <div class="panel" id="panel-monitor" style="display:none;">
+            <h2>📊 实时监控面板</h2>
+            
+            <!-- 任务状态概览 -->
+            <div class="status-overview">
+                <div class="status-card">
+                    <div class="status-label">当前状态</div>
+                    <div class="status-value" id="task-status">等待中</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">当前阶段</div>
+                    <div class="status-value" id="current-phase">-</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">处理进度</div>
+                    <div class="status-value" id="progress-text">0 / 0</div>
+                </div>
+            </div>
+
+            <!-- 进度条 -->
+            <div class="progress-section">
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span>🔍 地址搜索</span>
+                        <span id="search-progress-text">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="search-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span>📍 坐标转换</span>
+                        <span id="geo-progress-text">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="geo-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 当前处理项 -->
+            <div class="current-item">
+                <div class="current-item-label">正在处理：</div>
+                <div class="current-item-value" id="current-item">-</div>
+            </div>
+
+            <!-- 控制按钮 -->
+            <div class="control-buttons">
+                <button class="btn btn-warning" id="btn-pause">⏸️ 暂停</button>
+                <button class="btn btn-success" id="btn-resume" style="display:none;">▶️ 继续</button>
+                <button class="btn btn-danger" id="btn-interrupt">⏹️ 中断</button>
+                <button class="btn btn-secondary" id="btn-return-config">⚙️ 返回配置</button>
+            </div>
+
+            <!-- 日志输出 -->
+            <div class="log-section">
+                <div class="log-header">
+                    <span>📝 处理日志</span>
+                    <button class="btn btn-small" id="btn-clear-log">清空</button>
+                </div>
+                <div class="log-container" id="log-container">
+                    <div class="log-empty">等待任务开始...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 步骤4：结果面板 -->
+        <div class="panel" id="panel-result" style="display:none;">
+            <h2>✅ 处理完成</h2>
+            
+            <div class="result-summary">
+                <div class="result-stat">
+                    <div class="result-number" id="result-total">0</div>
+                    <div class="result-label">总条目</div>
+                </div>
+                <div class="result-stat success">
+                    <div class="result-number" id="result-success">0</div>
+                    <div class="result-label">成功</div>
+                </div>
+                <div class="result-stat error">
+                    <div class="result-number" id="result-fail">0</div>
+                    <div class="result-label">失败</div>
+                </div>
+            </div>
+
+            <!-- 结果列表 -->
+            <div class="result-list-section">
+                <h3>结果列表</h3>
+                <div class="result-table-container">
+                    <table class="result-table">
+                        <thead>
+                            <tr>
+                                <th>序号</th>
+                                <th>项目名称</th>
+                                <th>确认地址</th>
+                                <th>经度</th>
+                                <th>纬度</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="result-tbody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="button-row center">
+                <button class="btn btn-primary btn-large" id="btn-export">📥 导出Excel</button>
+                <button class="btn btn-secondary" id="btn-new-task">新建任务</button>
+            </div>
+        </div>
+
+        <!-- 地图预览面板 -->
+        <div class="panel" id="panel-map" style="display:none;">
+            <h2>🗺️ 地图预览</h2>
+            <div id="map-container" class="map-container"></div>
+            <div class="map-controls">
+                <button class="btn btn-secondary" id="btn-close-map">关闭地图</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 地址审核弹窗 -->
+    <div class="modal" id="modal-address-review" style="display:none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>🔍 地址审核 - <span id="review-item-name"></span></h3>
+                <button class="modal-close" id="btn-close-address-modal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="review-section">
+                    <h4>搜索结果</h4>
+                    <div class="search-results" id="search-results">
+                    </div>
+                </div>
+                <div class="review-section">
+                    <h4>确认地址</h4>
+                    <div class="form-group">
+                        <input type="text" id="confirmed-address" class="input-large" placeholder="请输入或确认地址">
+                        <span class="field-hint">您可以从上方搜索结果中选择，或手动输入正确地址</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btn-retry-search">🔄 重新搜索</button>
+                <button class="btn btn-primary" id="btn-confirm-address">✓ 确认地址</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 坐标审核弹窗 -->
+    <div class="modal" id="modal-coord-review" style="display:none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>📍 坐标审核 - <span id="coord-item-name"></span></h3>
+                <button class="modal-close" id="btn-close-coord-modal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="review-section">
+                    <h4>地址信息</h4>
+                    <div class="address-info" id="coord-address"></div>
+                </div>
+                <div class="review-section">
+                    <h4>坐标结果</h4>
+                    <div class="geo-results" id="geo-results">
+                    </div>
+                </div>
+                <div class="review-section">
+                    <h4>确认坐标</h4>
+                    <div class="coord-inputs">
+                        <div class="form-group">
+                            <label>经度</label>
+                            <input type="number" step="any" id="confirmed-longitude" placeholder="经度">
+                        </div>
+                        <div class="form-group">
+                            <label>纬度</label>
+                            <input type="number" step="any" id="confirmed-latitude" placeholder="纬度">
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary btn-small" id="btn-preview-map">🗺️ 在地图上预览</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btn-retry-geo">🔄 重新转换</button>
+                <button class="btn btn-primary" id="btn-confirm-coord">✓ 确认坐标</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 返回配置确认弹窗 -->
+    <div class="modal" id="modal-return-config" style="display:none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>⚙️ 返回配置页面</h3>
+                <button class="modal-close" id="btn-close-return-modal">×</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 20px; color: #4b5563;">返回配置页面后，您可以重新调整字段映射或API Key设置。</p>
+                <div class="return-config-options">
+                    <div class="return-config-option" id="option-save-progress">
+                        <div class="option-icon">💾</div>
+                        <div class="option-title">保存进度并返回</div>
+                        <div class="option-desc">保留当前已处理的结果，修改配置后可继续处理</div>
+                    </div>
+                    <div class="return-config-option" id="option-discard-progress">
+                        <div class="option-icon">🔄</div>
+                        <div class="option-title">不保存，重新开始</div>
+                        <div class="option-desc">清空当前进度，从第一条数据重新开始处理</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btn-cancel-return">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 任务ID显示 -->
+    <div class="task-id-badge" id="task-id-badge" style="display:none;">
+        任务ID: <span id="task-id-display"></span>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
