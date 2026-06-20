@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="非遗地址坐标查找工具 - 上传Excel，自动搜索非遗项目地址并转换为高德坐标">
+    <meta name="theme-color" content="#667eea">
+    <title>非遗地址坐标查找工具</title>
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部标题 -->
+        <header class="header">
+            <h1>🏛️ 非遗地址坐标查找工具</h1>
+            <p class="subtitle">Excel上传 → 网络搜索地址 → 人工审核 → 高德坐标转换 → 导出结果</p>
+        </header>
+
+        <!-- 步骤指示器 -->
+        <nav class="steps" aria-label="处理步骤">
+            <div class="step active" id="step-1" aria-current="step">
+                <div class="step-number" aria-hidden="true">1</div>
+                <div class="step-label">上传Excel</div>
+            </div>
+            <div class="step-line" aria-hidden="true"></div>
+            <div class="step" id="step-2">
+                <div class="step-number" aria-hidden="true">2</div>
+                <div class="step-label">字段映射</div>
+            </div>
+            <div class="step-line" aria-hidden="true"></div>
+            <div class="step" id="step-3">
+                <div class="step-number" aria-hidden="true">3</div>
+                <div class="step-label">处理中</div>
+            </div>
+            <div class="step-line" aria-hidden="true"></div>
+            <div class="step" id="step-4">
+                <div class="step-number" aria-hidden="true">4</div>
+                <div class="step-label">完成导出</div>
+            </div>
+        </nav>
+
+        <!-- 步骤1：上传区域 -->
+        <div class="panel" id="panel-upload">
+            <h2>📁 上传Excel文件</h2>
+            <div class="upload-progress" id="upload-progress" style="display:none;" aria-live="polite">
+                <div class="upload-progress-bar">
+                    <div class="upload-progress-fill" id="upload-progress-fill"></div>
+                </div>
+                <div class="upload-progress-text" id="upload-progress-text">正在上传...</div>
+            </div>
+
+            <div class="upload-area" id="upload-area" role="button" tabindex="0"
+                 aria-label="点击或拖拽上传Excel文件">
+                <div class="upload-icon" aria-hidden="true">📊</div>
+                <p class="upload-text">拖拽Excel文件到此处，或点击选择文件</p>
+                <p class="upload-hint">支持 .xlsx / .xls 格式，最大50MB</p>
+                <input type="file" id="file-input" accept=".xlsx,.xls" hidden aria-label="选择Excel文件">
+                <button class="btn btn-primary" id="btn-select-file" type="button">选择文件</button>
+            </div>
+            <div class="file-info" id="file-info" style="display:none;" aria-live="polite">
+                <span class="file-icon" aria-hidden="true">📄</span>
+                <span class="file-name" id="file-name"></span>
+                <span class="file-size" id="file-size"></span>
+                <span class="file-rows" id="file-rows"></span>
+                <button class="btn btn-small btn-outline-danger" id="btn-remove-file" type="button"
+                        title="移除文件，重新选择">✕</button>
+            </div>
+        </div>
+
+        <!-- 步骤2：字段映射和API配置 -->
+        <div class="panel" id="panel-mapping" style="display:none;">
+            <h2>⚙️ 字段映射与API配置</h2>
+            
+            <div class="mapping-section">
+                <h3>字段映射</h3>
+                <p class="section-desc">请选择Excel中对应的字段列</p>
+                
+                <div class="form-group">
+                    <label for="field-name">项目名称字段 <span class="required" aria-label="必填">*</span></label>
+                    <select id="field-name" aria-required="true">
+                        <option value="">请选择...</option>
+                    </select>
+                    <span class="field-hint">非遗项目名称，用于搜索地址</span>
+                </div>
+            </div>
+
+            <div class="mapping-section">
+                <h3>搜索范围设置</h3>
+                <p class="section-desc">选择搜索省份，提高地址搜索准确度（可多选）</p>
+                
+                <div class="form-group">
+                    <label for="province-select">限定搜索省份</label>
+                    <div class="province-selector" id="province-selector">
+                        <div class="province-search-box">
+                            <input type="text" id="province-search" class="province-search-input" 
+                                   placeholder="搜索省份..." aria-label="搜索省份">
+                            <div class="province-checkboxes" id="province-checkboxes" role="group" aria-label="省份选择">
+                                <!-- 省份复选框将通过JS动态生成 -->
+                            </div>
+                        </div>
+                        <div class="province-selected" id="province-selected">
+                            <span class="province-selected-label">已选择：</span>
+                            <span class="province-tags" id="province-tags"></span>
+                            <button class="btn btn-text btn-small" id="btn-clear-provinces" type="button" style="display:none;">清空</button>
+                        </div>
+                    </div>
+                    <span class="field-hint">💡 不选择则搜索全国范围；选择后可大幅提高地址匹配准确度</span>
+                </div>
+            </div>
+
+            <div class="mapping-section">
+                <h3>处理模式</h3>
+                <p class="section-desc">选择数据处理方式</p>
+                
+                <div class="mode-selector" role="radiogroup" aria-label="处理模式选择">
+                    <div class="mode-option selected" data-mode="semi" id="mode-semi"
+                         role="radio" aria-checked="true" tabindex="0">
+                        <div class="mode-icon" aria-hidden="true">🤖</div>
+                        <div class="mode-title">半自动模式</div>
+                        <div class="mode-desc">每一步都需要人工审核确认，确保数据准确性</div>
+                    </div>
+                    <div class="mode-option" data-mode="auto" id="mode-auto"
+                         role="radio" aria-checked="false" tabindex="0">
+                        <div class="mode-icon" aria-hidden="true">🚀</div>
+                        <div class="mode-title">全自动模式</div>
+                        <div class="mode-desc">自动搜索地址、转换坐标，全程无人值守快速处理</div>
+                    </div>
+                    <div class="mode-option" data-mode="two_pass" id="mode-two-pass"
+                         role="radio" aria-checked="false" tabindex="0">
+                        <div class="mode-icon" aria-hidden="true">🔄</div>
+                        <div class="mode-title">两遍模式</div>
+                        <div class="mode-desc">第一遍自动搜索，第二遍统一人工审核，兼顾效率与准确性</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mapping-section">
+                <h3>高德地图API配置</h3>
+                <p class="section-desc">请输入您的高德地图Web服务API Key</p>
+                
+                <div class="form-group">
+                    <label for="amap-key">高德API Key <span class="required" aria-label="必填">*</span></label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="amap-key" 
+                               placeholder="请输入高德地图API Key"
+                               autocomplete="off"
+                               aria-required="true">
+                        <button class="btn-eye" id="btn-toggle-key" type="button"
+                                aria-label="显示/隐藏API Key" title="显示/隐藏API Key">
+                            👁️
+                        </button>
+                    </div>
+                    <span class="field-hint">
+                        <a href="https://lbs.amap.com/api/webservice/guide/create-project/get-key"
+                           target="_blank" rel="noopener noreferrer">
+                            🔗 如何获取API Key？
+                        </a>
+                        &nbsp;·&nbsp;
+                        <a href="#" id="btn-save-key" class="hint-action">💾 记住Key</a>
+                        &nbsp;·&nbsp;
+                        <a href="#" id="btn-clear-key" class="hint-action">🗑️ 清除记忆</a>
+                    </span>
+                </div>
+            </div>
+
+
+            <div class="mapping-section">
+                <h3>AI搜索配置（豆包）</h3>
+                <p class="section-desc">填写豆包API Key后，可在地址审核时使用AI直接回答地址</p>
+
+                <div class="form-group">
+                    <label for="doubao-key">豆包API Key</label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="doubao-key"
+                               placeholder="请输入豆包API Key"
+                               autocomplete="off">
+                        <button class="btn-eye" id="btn-toggle-doubao-key" type="button"
+                                aria-label="显示/隐藏API Key" title="显示/隐藏API Key">
+                            👁️
+                        </button>
+                    </div>
+                    <span class="field-hint">
+                        <a href="https://www.volcengine.com/docs/82379"
+                           target="_blank" rel="noopener noreferrer">
+                            🔗 如何获取豆包API Key？
+                        </a>
+                        &nbsp;·&nbsp;
+                        <a href="#" id="btn-save-doubao-key" class="hint-action">记住Key</a>
+                        &nbsp;·&nbsp;
+                        <a href="#" id="btn-clear-doubao-key" class="hint-action">清除记忆</a>
+                    </span>
+                </div>
+
+                <div class="form-group">
+                    <label for="doubao-model-id">推理接入点ID <span class="field-hint">(模型)</span></label>
+                    <input type="text" id="doubao-model-id"
+                           placeholder="如：ep-20250620001700-4hgdm"
+                           autocomplete="off">
+                    <span class="field-hint">
+                        <a href="https://www.volcengine.com/docs/82379"
+                           target="_blank" rel="noopener noreferrer">
+                            🔗 如何获取推理接入点ID？
+                        </a>
+                        &nbsp;·&nbsp;
+                        <a href="#" id="btn-save-doubao-model" class="hint-action">💾 记住ID</a>
+                        &nbsp;·&nbsp;
+                        <a href="#" id="btn-clear-doubao-model" class="hint-action">🗑️ 清除记忆</a>
+                    </span>
+                </div>
+            </div>
+
+            <div class="button-row">
+                <button class="btn btn-secondary" id="btn-back-upload" type="button">← 返回上一步</button>
+                <button class="btn btn-primary" id="btn-start" type="button">开始处理 →</button>
+            </div>
+        </div>
+
+        <!-- 步骤3：监控面板 -->
+        <div class="panel" id="panel-monitor" style="display:none;">
+            <h2>📊 实时监控面板</h2>
+            
+            <!-- 任务状态概览 -->
+            <div class="status-overview" role="status" aria-live="polite">
+                <div class="status-card">
+                    <div class="status-label">当前状态</div>
+                    <div class="status-value" id="task-status">等待中</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">当前阶段</div>
+                    <div class="status-value" id="current-phase">-</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">处理进度</div>
+                    <div class="status-value" id="progress-text">0 / 0</div>
+                </div>
+            </div>
+
+            <!-- 进度条 -->
+            <div class="progress-section" aria-label="处理进度">
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span>🔍 地址搜索</span>
+                        <span id="search-progress-text" aria-live="polite">0%</span>
+                    </div>
+                    <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                        <div class="progress-fill" id="search-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span>📍 坐标转换</span>
+                        <span id="geo-progress-text" aria-live="polite">0%</span>
+                    </div>
+                    <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                        <div class="progress-fill" id="geo-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 当前处理项 -->
+            <div class="current-item" aria-live="polite">
+                <div class="current-item-label">正在处理：</div>
+                <div class="current-item-value" id="current-item">-</div>
+            </div>
+
+            <!-- 控制按钮 -->
+            <div class="control-buttons" role="group" aria-label="任务控制">
+                <button class="btn btn-warning" id="btn-pause" type="button">⏸️ 暂停</button>
+                <button class="btn btn-success" id="btn-resume" style="display:none;" type="button">▶️ 继续</button>
+                <button class="btn btn-danger" id="btn-interrupt" type="button">⏹️ 中断</button>
+                <button class="btn btn-secondary" id="btn-return-config" type="button">⚙️ 返回配置</button>
+            </div>
+
+            <!-- 两遍模式：第一遍完成提示 -->
+            <div class="two-pass-notice" id="two-pass-notice" style="display:none;" aria-live="polite">
+                <div class="noticle-icon">✅</div>
+                <div class="noticle-content">
+                    <div class="noticle-title">第一遍搜索完成！</div>
+                    <div class="noticle-desc" id="pass1-summary"></div>
+                </div>
+                <button class="btn btn-primary" id="btn-start-pass2" type="button">开始第二遍审核 →</button>
+            </div>
+
+                        <!-- 日志输出 -->
+            <div class="log-section">
+                <div class="log-header">
+                    <span>📝 处理日志</span>
+                    <div class="log-actions">
+                        <button class="btn btn-small" id="btn-scroll-log" type="button" title="滚动到最新">⬇️</button>
+                        <button class="btn btn-small" id="btn-clear-log" type="button">清空</button>
+                    </div>
+                </div>
+                <div class="log-container" id="log-container" role="log" aria-label="任务处理日志" aria-live="polite">
+                    <div class="log-empty">等待任务开始...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 步骤4：结果面板 -->
+        <div class="panel" id="panel-result" style="display:none;">
+            <h2>✅ 处理完成</h2>
+            
+            <div class="result-summary" role="region" aria-label="处理结果统计">
+                <div class="result-stat">
+                    <div class="result-number" id="result-total">0</div>
+                    <div class="result-label">总条目</div>
+                </div>
+                <div class="result-stat success">
+                    <div class="result-number" id="result-success">0</div>
+                    <div class="result-label">成功</div>
+                </div>
+                <div class="result-stat error">
+                    <div class="result-number" id="result-fail">0</div>
+                    <div class="result-label">失败</div>
+                </div>
+                <div class="result-stat pending">
+                    <div class="result-number" id="result-pending">0</div>
+                    <div class="result-label">待处理</div>
+                </div>
+            </div>
+
+            <!-- 结果列表 -->
+            <div class="result-list-section">
+                <div class="result-list-header">
+                    <h3>结果列表</h3>
+                    <div class="result-filters" role="group" aria-label="结果筛选">
+                        <button class="btn btn-small filter-btn active" data-filter="all" type="button">全部</button>
+                        <button class="btn btn-small filter-btn" data-filter="success" type="button">✅ 成功</button>
+                        <button class="btn btn-small filter-btn" data-filter="fail" type="button">❌ 失败</button>
+                        <button class="btn btn-small filter-btn" data-filter="pending" type="button">⚠️ 待审核</button>
+                    </div>
+                </div>
+                <div class="result-table-container">
+                    <table class="result-table" aria-label="处理结果列表">
+                        <thead>
+                            <tr>
+                                <th scope="col">序号</th>
+                                <th scope="col">项目名称</th>
+                                <th scope="col">确认地址</th>
+                                <th scope="col">经度</th>
+                                <th scope="col">纬度</th>
+                                <th scope="col">状态</th>
+                                <th scope="col">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="result-tbody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="button-row center">
+                <button class="btn btn-primary btn-large" id="btn-export" type="button">📥 导出Excel</button>
+                <button class="btn btn-secondary" id="btn-new-task" type="button">🔁 新建任务</button>
+            </div>
+        </div>
+
+        <!-- 地图预览面板 -->
+        <div class="panel" id="panel-map" style="display:none;">
+            <h2>🗺️ 地图预览</h2>
+            <div id="map-container" class="map-container" aria-label="地图预览区域"></div>
+            <div class="map-controls">
+                <button class="btn btn-secondary" id="btn-close-map" type="button">关闭地图</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 地址审核弹窗 -->
+    <div class="modal" id="modal-address-review" style="display:none;"
+         role="dialog" aria-modal="true" aria-labelledby="address-modal-title">
+        <div class="modal-overlay"></div>
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3 id="address-modal-title">🔍 地址审核 - <span id="review-item-name"></span></h3>
+                <button class="modal-close" id="btn-close-address-modal" type="button"
+                        aria-label="关闭弹窗">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="review-section">
+                    <h4>搜索结果</h4>
+                    <div class="search-results" id="search-results" role="listbox" aria-label="搜索结果列表">
+                    </div>
+                    <div class="search-loading" id="search-loading" style="display:none;" aria-live="polite">
+                        <div class="loading-spinner" aria-hidden="true"></div>
+                        <div class="loading-text">正在搜索地址...</div>
+                        <div class="loading-hint" id="search-loading-hint" style="display:none;">
+                            ⚠️ 搜索时间较长，可能是网络问题...
+                        </div>
+                    </div>
+                </div>
+                <div class="review-section">
+                    <h4>确认地址</h4>
+                    <div class="form-group">
+                        <input type="text" id="confirmed-address" class="input-large"
+                               placeholder="请输入或确认地址" aria-label="确认地址输入框">
+                        <span class="field-hint">💡 您可以从上方搜索结果中选择，或直接手动输入正确地址跳过搜索</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="modal-quick-actions">
+                    <button class="btn btn-text btn-small" type="button" onclick="interruptTask()">⏹️ 中断任务</button>
+                    <button class="btn btn-text btn-small" type="button" onclick="showReturnConfigModal()">⚙️ 返回配置</button>
+                </div>
+                <div class="search-custom-section">
+                    <input type="text" id="custom-search-keyword" class="input-small"
+                           placeholder="输入关键词重新搜索..." aria-label="自定义搜索关键词">
+                    <button class="btn btn-secondary btn-small" id="btn-custom-search" type="button">🔍 重新搜索</button>
+                    <button class="btn btn-primary btn-small" id="btn-ai-search" type="button">🤖 AI搜索</button>
+                </div>
+                <button class="btn btn-secondary" id="btn-retry-search" type="button">🔄 重试</button>
+                <button class="btn btn-secondary" id="btn-cancel-address-review" type="button">✕ 取消</button>
+                <button class="btn btn-primary" id="btn-confirm-address" type="button">✓ 确认地址</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 坐标审核弹窗 -->
+    <div class="modal" id="modal-coord-review" style="display:none;"
+         role="dialog" aria-modal="true" aria-labelledby="coord-modal-title">
+        <div class="modal-overlay"></div>
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3 id="coord-modal-title">📍 坐标审核 - <span id="coord-item-name"></span></h3>
+                <button class="modal-close" id="btn-close-coord-modal" type="button"
+                        aria-label="关闭弹窗">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="review-section">
+                    <h4>地址信息</h4>
+                    <div class="address-info" id="coord-address"></div>
+                </div>
+                <div class="review-section">
+                    <h4>坐标结果</h4>
+                    <div class="geo-results" id="geo-results" role="listbox" aria-label="坐标结果列表">
+                    </div>
+                </div>
+                <div class="review-section">
+                    <h4>确认坐标</h4>
+                    <div class="coord-inputs">
+                        <div class="form-group">
+                            <label for="confirmed-longitude">经度</label>
+                            <input type="number" step="any" id="confirmed-longitude"
+                                   placeholder="经度（如：114.057939）" aria-label="经度">
+                        </div>
+                        <div class="form-group">
+                            <label for="confirmed-latitude">纬度</label>
+                            <input type="number" step="any" id="confirmed-latitude"
+                                   placeholder="纬度（如：22.543099）" aria-label="纬度">
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary btn-small" id="btn-preview-map" type="button">🗺️ 在地图上预览</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="modal-quick-actions">
+                    <button class="btn btn-text btn-small" type="button" onclick="interruptTask()">⏹️ 中断任务</button>
+                    <button class="btn btn-text btn-small" type="button" onclick="showReturnConfigModal()">⚙️ 返回配置</button>
+                </div>
+                <button class="btn btn-secondary" id="btn-retry-geo" type="button">🔄 重新转换</button>
+                <button class="btn btn-outline" id="btn-cancel-coord-review" type="button">✕ 取消</button>
+                <button class="btn btn-primary" id="btn-confirm-coord" type="button">✓ 确认坐标</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 返回配置确认弹窗 -->
+    <div class="modal" id="modal-return-config" style="display:none;"
+         role="dialog" aria-modal="true" aria-labelledby="return-modal-title">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="return-modal-title">⚙️ 返回配置页面</h3>
+                <button class="modal-close" id="btn-close-return-modal" type="button"
+                        aria-label="关闭弹窗">×</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 20px; color: #4b5563;">返回配置页面后，您可以重新调整字段映射或API Key设置。</p>
+                <div class="return-config-options">
+                    <div class="return-config-option" id="option-save-progress"
+                         role="button" tabindex="0" aria-label="保存进度并返回配置">
+                        <div class="option-icon" aria-hidden="true">💾</div>
+                        <div class="option-title">保存进度并返回</div>
+                        <div class="option-desc">保留当前已处理的结果，修改配置后可继续处理</div>
+                    </div>
+                    <div class="return-config-option" id="option-discard-progress"
+                         role="button" tabindex="0" aria-label="丢弃进度重新开始">
+                        <div class="option-icon" aria-hidden="true">🔄</div>
+                        <div class="option-title">不保存，重新开始</div>
+                        <div class="option-desc">清空当前进度，从第一条数据重新开始处理</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btn-cancel-return" type="button">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 确认对话框（替代原生 confirm） -->
+    <div class="modal" id="modal-confirm" style="display:none;"
+         role="alertdialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+        <div class="modal-overlay"></div>
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3 id="confirm-modal-title">⚠️ 确认操作</h3>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-modal-message" style="color:#4b5563;font-size:15px;line-height:1.6;"></p>
+            </div>
+            <div class="modal-footer" style="justify-content:center;gap:16px;">
+                <button class="btn btn-secondary" id="btn-confirm-cancel" type="button">取消</button>
+                <button class="btn btn-primary" id="btn-confirm-ok" type="button">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 任务ID显示 -->
+    <div class="task-id-badge" id="task-id-badge" style="display:none;" aria-label="当前任务ID">
+        任务 <span id="task-id-display"></span>
+    </div>
+
+    <!-- 诊断脚本：检测JS加载和初始化状态 -->
+    <script>
+        window.__DEBUG = { jsLoaded: false, initError: null };
+        console.log('[DIAG] HTML解析完成，开始加载app.js...');
+        window.addEventListener('error', function(e) {
+            console.error('[DIAG] JS运行时错误:', e.message, 'at', e.filename, ':', e.lineno);
+            window.__DEBUG.initError = { msg: e.message, file: e.filename, line: e.lineno };
+        }, true);
+    </script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=20260620" onerror="console.error('[DIAG] app.js加载失败！'); window.__DEBUG.jsError='LOAD_FAILED';"></script>
+    <script>
+        if (window.__DEBUG && !window.__DEBUG.jsError) {
+            window.__DEBUG.jsLoaded = true;
+            console.log('[DIAG] app.js加载成功');
+            setTimeout(function() {
+                var hasListeners = false;
+                if (typeof elements !== 'undefined' && elements.btnStart) {
+                    hasListeners = elements.btnStart.onclick || elements.btnStart._listeners;
+                }
+                console.log('[DIAG] 延迟检查 - state:', typeof state !== 'undefined' ? 'OK' : 'MISSING');
+                console.log('[DIAG] 延迟检查 - elements:', typeof elements !== 'undefined' ? 'OK' : 'MISSING');
+                console.log('[DIAG] 延迟检查 - selectMode:', typeof selectMode === 'function' ? 'OK' : 'MISSING');
+                console.log('[DIAG] 延迟检查 - startTask:', typeof startTask === 'function' ? 'OK' : 'MISSING');
+            }, 1000);
+        }
+    </script>
+</body>
+</html>

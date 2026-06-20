@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>非遗地址坐标查找工具 - 启动器</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .card {
+    background: white;
+    border-radius: 20px;
+    padding: 48px 40px 40px;
+    width: 420px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    text-align: center;
+  }
+
+  .icon { font-size: 56px; margin-bottom: 16px; }
+
+  h1 {
+    font-size: 22px;
+    color: #1f2937;
+    margin-bottom: 8px;
+  }
+
+  .subtitle {
+    font-size: 14px;
+    color: #6b7280;
+    margin-bottom: 32px;
+    line-height: 1.6;
+  }
+
+  .btn-open {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: opacity 0.2s, transform 0.2s;
+    margin-bottom: 12px;
+  }
+  .btn-open:hover { opacity: 0.9; transform: translateY(-1px); }
+
+  .btn-start {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    background: #f3f4f6;
+    color: #374151;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.2s;
+    margin-bottom: 24px;
+  }
+  .btn-start:hover { background: #e5e7eb; }
+
+  .status-bar {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: #6b7280;
+    text-align: left;
+    margin-bottom: 16px;
+  }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #d1d5db;
+    margin-right: 6px;
+    vertical-align: middle;
+    transition: background 0.3s;
+  }
+  .status-dot.online { background: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,0.2); }
+  .status-dot.offline { background: #ef4444; }
+
+  #status-text { vertical-align: middle; }
+
+  .hint {
+    font-size: 12px;
+    color: #9ca3af;
+    line-height: 1.8;
+  }
+
+  .hint code {
+    background: #f3f4f6;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    color: #374151;
+    user-select: all;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="icon">🗺️</div>
+  <h1>非遗地址坐标查找工具</h1>
+  <p class="subtitle">粤港澳大湾区非遗数据地理编码工具<br>基于高德地图 API</p>
+
+  <div class="status-bar">
+    <span class="status-dot" id="dot"></span>
+    <span id="status-text">正在检测服务状态...</span>
+  </div>
+
+  <a href="http://localhost:5000" target="_blank" class="btn-open" id="btn-open">
+    🚀 打开工具
+  </a>
+
+  <div class="hint" id="start-hint" style="display:none;">
+    <p style="margin-bottom:8px;">⚠️ 服务未运行，请先启动：</p>
+    <p>在项目目录打开命令行，执行：</p>
+    <p style="margin: 6px 0;"><code>python app.py</code></p>
+    <p>然后刷新此页面或点击"打开工具"</p>
+  </div>
+</div>
+
+<script>
+  const dot = document.getElementById('dot');
+  const statusText = document.getElementById('status-text');
+  const startHint = document.getElementById('start-hint');
+
+  function checkServer() {
+    fetch('http://localhost:5000/', { mode: 'no-cors', cache: 'no-store' })
+      .then(() => {
+        dot.className = 'status-dot online';
+        statusText.textContent = '服务运行中 · localhost:5000';
+        startHint.style.display = 'none';
+        // 2秒后自动跳转
+        setTimeout(() => {
+          window.open('http://localhost:5000', '_blank');
+        }, 800);
+      })
+      .catch(() => {
+        dot.className = 'status-dot offline';
+        statusText.textContent = '服务未运行 · 请先启动 app.py';
+        startHint.style.display = 'block';
+      });
+  }
+
+  checkServer();
+
+  // 每3秒重新检测一次
+  setInterval(checkServer, 3000);
+</script>
+
+</body>
+</html>
