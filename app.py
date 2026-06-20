@@ -361,54 +361,83 @@ def search_amap_places(keyword, amap_key, provinces=None):
 
 def search_heritage_address(keyword, custom_keyword=None, provinces=None, amap_key=None, doubao_api_key=None, doubao_model_id=None):
     """
-    搜索非遗项目的真实地址
-    优先使用高德地点搜索API，失败后再用网页搜索
-    参数:
-        keyword: 项目名称
-        custom_keyword: 自定义搜索关键词（可选）
-        provinces: 省份列表（可选），限定搜索省份以提高准确度
-        amap_key: 高德API Key（可选），用于高德地点搜索
+    搜索非遗项目的真实地址 — 【粤港澳大湾区版】
+    策略：
+      1. 若配置了豆包 API Key → 以豆包 AI 搜索为首选（带大湾区地理约束）
+      2. AI 搜索命中 → 直接返回 AI 结果（最高优先级，结果最准确）
+      3. AI 搜索失败 → 回退到高德地点搜索 + 网页搜索（搜索关键词均加上"粤港澳大湾区"）
     """
     results = []
-    
-    # 第零优先：豆包AI搜索（如果配置了Key）
+
+    # ========== 第 1 优先：豆包 AI 搜索（带大湾区约束） ==========
     if doubao_api_key:
         try:
-            ai_result = call_doubao_for_address(keyword, doubao_api_key, amap_key, model_id=doubao_model_id)
+            ai_result = call_doubao_for_address(
+                keyword, doubao_api_key, amap_key, model_id=doubao_model_id
+            )
         except Exception as e:
+            print(f"[search_heritage_address] 豆包AI调用异常({keyword}): {e}")
             ai_result = None
+
         if ai_result and ai_result.get('address'):
-            results.append({
-                'title': '豆包AI：' + str(ai_result.get('raw_response', '')),
-                'snippet': 'AI直接回答，置信度：' + str(ai_result.get('confidence', '')),
-                'address': ai_result['address'],
+            ai_address = ai_result['address']
+            item = {
+                'title': f"🤖 豆包AI搜索（粤港澳大湾区）：{keyword}",
+                'snippet': (ai_result.get('raw_response') or ai_address),
+                'address': ai_address,
+                'extracted_address': ai_address,
+                'smart_address': ai_address,
                 'lng': ai_result.get('lng'),
                 'lat': ai_result.get('lat'),
-                'confidence': ai_result['confidence'],
-                'source': ai_result['source'],
-                'is_ai': True
-            })
-            # 高置信度直接返回，否则继续网页搜索
-            if ai_result['confidence'] >= 0.9:
+                'confidence': ai_result.get('confidence', 0.85),
+                'address_confidence': ai_result.get('confidence', 0.85),
+                'source': ai_result.get('source', '豆包AI'),
+                'source_name': ai_result.get('source', '豆包AI'),
+                'source_type': 'ai',
+                'is_ai': True,
+            }
+            if ai_result.get('lng') and ai_result.get('lat'):
+                item['gaode_location'] = f"{ai_result['lng']},{ai_result['lat']}"
+            results.append(item)
+            # AI 结果为最高置信度，只要置信度 >= 0.6 就直接返回，不再做网页搜索
+            if ai_result.get('confidence', 0) >= 0.6:
                 return results
     
     
+    # 【粤港澳大湾区约束】：给所有回退搜索关键词加上"粤港澳大湾区"前缀
+    def _wrap_gba(q):
+        if not q:
+            return q
+        if any(c in q for c in ["粤港澳", "大湾区", "香港", "澳门"]):
+            return q
+        return f"粤港澳大湾区 {q}"
+
     # 提取多个搜索关键词变体
     if custom_keyword:
         keyword_variations = [custom_keyword]
     else:
         extracted = extract_search_keywords(keyword)
         keyword_variations = extracted['variations']
-    
-    # 第一优先：使用高德地点搜索API（如果用户已配置Key）
+
+    # 回退 1：使用高德地点搜索 API（如用户已配置 Key）
     if amap_key:
         for kw in keyword_variations:
             if results:
-                break  # 已经找到结果，不再尝试其他关键词
-            amap_results = search_amap_places(kw, amap_key, provinces)
+                break  # 已找到结果，不再尝试其他关键词
+            amap_results = search_amap_places(_wrap_gba(kw), amap_key, provinces)
             if amap_results:
-                results.extend(amap_results)
-                # 高德API结果足够好，直接返回（最多5条）
+                # 只保留地理上确实落在大湾区的高德结果
+                for r in amap_results:
+                    loc = r.get('gaode_location') or r.get('location')
+                    if loc and ',' in loc:
+                        try:
+                            lng_s, lat_s = loc.split(',', 1)
+                            if not (GBA_LNG_MIN <= float(lng_s) <= GBA_LNG_MAX and
+                                    GBA_LAT_MIN <= float(lat_s) <= GBA_LAT_MAX):
+                                continue  # 坐标不在大湾区 → 丢弃
+                        except (ValueError, TypeError):
+                            pass
+                    results.append(r)
                 if len(results) >= 3:
                     return results[:5]
     
@@ -418,26 +447,14 @@ def search_heritage_address(keyword, custom_keyword=None, provinces=None, amap_k
         try:
             # 构造搜索关键词
             if custom_keyword:
-                search_query = custom_keyword
+                search_query = _wrap_gba(custom_keyword)
             else:
-                # 使用非遗专用搜索词提高命中率
                 extracted_kw = extract_search_keywords(keyword)
                 heritage_qs = extracted_kw.get('heritage_queries', [])
-                
-                if provinces:
-                    province_str = ' '.join([p.replace('省','').replace('市','').replace('自治区','')
-                                              .replace('壮族','').replace('回族','').replace('维吾尔','')
-                                              .replace('特别行政区','') for p in provinces[:3]])
-                    best_query = ''
-                    for q in heritage_qs[:5]:
-                        query_with_province = f"{q} {province_str}"
-                        best_query = query_with_province
-                        break
-                    if not best_query:
-                        best_query = f"{keyword} 非遗 保护单位 地址"
-                    search_query = best_query
+                if heritage_qs:
+                    search_query = f"粤港澳大湾区 {heritage_qs[0]}"
                 else:
-                    search_query = heritage_qs[0] if heritage_qs else f"{keyword} 非遗 保护单位 地址"
+                    search_query = f"粤港澳大湾区 {keyword} 非遗 保护单位 地址"
             url = f"https://www.baidu.com/s?wd={requests.utils.quote(search_query)}"
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -578,110 +595,114 @@ def search_heritage_address(keyword, custom_keyword=None, provinces=None, amap_k
 
 def fallback_search(keyword, custom_keyword=None, provinces=None, amap_key=None):
     """
-    备用搜索方式：必应搜索 + 高德API（如有Key）
-    参数:
-        keyword: 项目名称
-        custom_keyword: 自定义搜索关键词（可选）
-        provinces: 省份列表（可选）
-        amap_key: 高德API Key（可选）
+    备用搜索方式：必应搜索 + 高德API（如有Key）— 带粤港澳大湾区约束
     """
     results = []
-    
-    # 如果有高德Key，先尝试高德地点搜索
+
+    # 大湾区关键词包装
+    def _wrap_gba_local(q):
+        if not q:
+            return q
+        if any(c in q for c in ["粤港澳", "大湾区", "香港", "澳门"]):
+            return q
+        return f"粤港澳大湾区 {q}"
+
+    # 如果有高德Key，先尝试高德地点搜索（带大湾区约束）
     if amap_key:
-        gaode_results = search_amap_places(keyword, amap_key, provinces)
+        gaode_results = search_amap_places(_wrap_gba_local(keyword), amap_key, provinces)
         if gaode_results:
-            results.extend(gaode_results)
-    
-    # 必应搜索作为补充
+            # 只保留地理上确实落在大湾区的高德结果
+            for r in gaode_results:
+                loc = r.get('gaode_location') or r.get('location')
+                if loc and ',' in loc:
+                    try:
+                        lng_s, lat_s = loc.split(',', 1)
+                        if not (GBA_LNG_MIN <= float(lng_s) <= GBA_LNG_MAX and
+                                GBA_LAT_MIN <= float(lat_s) <= GBA_LAT_MAX):
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                results.append(r)
+
+    # 必应搜索作为补充（带大湾区约束）
     try:
         if custom_keyword:
-            search_query = custom_keyword
+            search_query = _wrap_gba_local(custom_keyword)
         else:
-            if provinces:
-                province_str = ' '.join([p.replace('省','').replace('市','').replace('自治区','')
-                                          .replace('壮族','').replace('回族','').replace('维吾尔','')
-                                          .replace('特别行政区','') for p in provinces[:3]])
-                fb_kw = extract_search_keywords(keyword)
-                fb_qs = fb_kw.get('heritage_queries', [])
-                search_query = f"{fb_qs[0]} {province_str}" if fb_qs else f"{keyword} {province_str} 非遗 保护单位 地址"
+            fb_kw = extract_search_keywords(keyword)
+            fb_qs = fb_kw.get('heritage_queries', [])
+            if fb_qs:
+                search_query = f"粤港澳大湾区 {fb_qs[0]}"
             else:
-                fb_kw = extract_search_keywords(keyword)
-                fb_qs = fb_kw.get('heritage_queries', [])
-                search_query = fb_qs[0] if fb_qs else f"{keyword} 非遗 保护单位 地址"
+                search_query = f"粤港澳大湾区 {keyword} 非遗 保护单位 地址"
         url = f"https://cn.bing.com/search?q={requests.utils.quote(search_query)}"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        
+
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'lxml')
-        
-        # 尝试多个必应选择器（必应HTML结构也会变化）
+
+        # 尝试多个必应选择器
         items = []
         for selector in ['.b_algo', 'li.b_algo', '.b_title', '#b_results > li']:
             items = soup.select(selector)
             if len(items) >= 3:
                 break
-        
+
         for idx, item in enumerate(items[:5]):
             title_elem = item.select_one('h2 a, .b_title a')
             snippet_elem = item.select_one('.b_caption p, .b_algoSlug')
-            
+
             title = title_elem.get_text(strip=True) if title_elem else ''
             snippet = snippet_elem.get_text(strip=True) if snippet_elem else ''
             link = title_elem.get('href', '') if title_elem else ''
-            
             real_url = link
-            
+
             source_name = get_source_name(real_url) if real_url else '必应搜索'
             source_type = get_source_type(source_name, real_url)
-            
-            # v4: 非遗元数据提取优先
+
             full_txt = title + (' ' + snippet if snippet else '')
             heritage_result = extract_heritage_info(full_txt)
             h_addr = heritage_result.get('address', '')
             h_conf = heritage_result.get('confidence', 0)
-            
+
             smart_result = smart_extract_address(title, snippet, real_url)
             s_addr = smart_result['address']
             s_conf = smart_result['confidence']
-            
+
             if h_addr and h_conf >= s_conf:
                 address = h_addr
                 confidence = h_conf
-                addr_source = f'heritage:{heritage_result.get("source", "")}'
-                addr_components = dict(smart_result['components'])
-                addr_components['heritage_region'] = heritage_result.get('region_detail', '')
-                addr_components['organization'] = heritage_result.get('organization', '')
             elif s_addr:
                 address = s_addr
                 confidence = s_conf
-                addr_source = smart_result['source']
-                addr_components = smart_result['components']
             else:
                 old_address = extract_address_from_text(full_txt)
                 address = old_address if old_address else ''
                 confidence = 0.35 if address else 0
-                addr_source = 'legacy_fallback'
-                addr_components = {}
-            
-            # v4: 地理编码
+
+            # 【大湾区过滤】：丢弃明显不包含大湾区城市的结果
+            if address and not any(city in address for city in GBA_CITIES):
+                continue
+
+            # 地理编码（带大湾区范围校验）
             geo_location = None
             if address and amap_key:
                 geo_result = geocode_text_address(address, amap_key)
                 if geo_result and geo_result.get('lng'):
-                    geo_location = f"{geo_result['lng']},{geo_result['lat']}"
-                    confidence = max(confidence, geo_result.get('confidence', 0) * 0.9 + 0.1)
-                    addr_components['geocoded'] = 'true'
-                    addr_components['geo_province'] = geo_result.get('province', '')
-                    addr_components['geo_city'] = geo_result.get('city', '')
-                    addr_components['geo_district'] = geo_result.get('district', '')
-            
-            # 避免重复添加（已有高德结果时）
+                    try:
+                        if (GBA_LNG_MIN <= float(geo_result['lng']) <= GBA_LNG_MAX and
+                                GBA_LAT_MIN <= float(geo_result['lat']) <= GBA_LAT_MAX):
+                            geo_location = f"{geo_result['lng']},{geo_result['lat']}"
+                            confidence = max(confidence, geo_result.get('confidence', 0) * 0.9 + 0.1)
+                    except (ValueError, TypeError):
+                        pass
+
+            # 避免重复添加
             if results and any(r.get('title', '') == title for r in results):
                 continue
-            
+
             result_item = {
                 'index': len(results) + 1,
                 'title': title,
@@ -693,26 +714,17 @@ def fallback_search(keyword, custom_keyword=None, provinces=None, amap_key=None)
                 'extracted_address': address,
                 'smart_address': address,
                 'address_confidence': round(confidence, 2),
-                'address_components': addr_components,
-                'address_source': addr_source,
                 'source': source_name
             }
             if geo_location:
                 result_item['gaode_location'] = geo_location
-            
+
             results.append(result_item)
+
     except Exception:
         pass
-    
-    # 对搜索结果进行相关性过滤和排序
-    if results:
-        place_name = extract_place_name(keyword)
-        results = filter_and_sort_results(results, keyword, place_name)
-    
-    return results[:5]
 
-
-
+    return results
 
 
 # ==================== 豆包AI搜索 ====================
@@ -733,13 +745,20 @@ def call_doubao_for_address(project_name, doubao_api_key, amap_key=None, model_i
 
     use_model = model_id if model_id else DOUBAO_MODEL
 
-    # 构造提示词（让AI扮演非遗专家，直接回答地址）
+    # 粤港澳大湾区城市清单（用于 prompt 约束和结果校验）
+    gba_cities_str = "、".join(GBA_CITIES)
+
+    # 构造提示词：明确要求 AI 回答大湾区范围内的地址；若项目不在大湾区，要回答不确定
     prompt = (
-        "你是非遗数据专家。请回答：国家级或省级非遗项目"
-        f"「{project_name}」\n"
+        "你是非遗数据与地理坐标专家，擅长查询中国国家级和省级非物质文化遗产项目的申报地区信息。"
+        f"请回答：国家级或省级非遗项目「{project_name}」\n"
         "的申报地区（或主要流传区域、保护单位所在地）是哪里？\n"
-        "只回答标准地名（格式：省+市+县/区+镇/街道，例如：广东省佛山市南海区九江镇），"
-        "不要加任何解释、标点符号或换行。如果不确定，回答「不确定」。"
+        "【地理范围约束】本次搜索仅限粤港澳大湾区内城市，包括："
+        f"{gba_cities_str}。\n"
+        "如果你判断该项目的申报地区不在上述大湾区城市，请直接回答「不确定」。\n"
+        "【输出格式要求】只回答标准中文地名，格式为：省+市+县/区+镇/街道，"
+        "例如：广东省佛山市南海区九江镇。不要加任何解释、标点（地址内部的标点除外）、英文、数字或换行。"
+        "如果项目信息缺失、来源不足或超出大湾区范围，请只回答「不确定」。"
     )
 
     try:
@@ -748,18 +767,16 @@ def call_doubao_for_address(project_name, doubao_api_key, amap_key=None, model_i
             "Content-Type": "application/json"
         }
         # 使用标准 OpenAI 兼容的 chat/completions 接口（火山引擎ARK稳定版）
+        # 默认尝试联网搜索（web_search），提高地址准确度；即使模型本身可能不支持，
+        # 也会被服务端自动忽略 tools 字段，不会抛错
         payload = {
             "model": use_model,
             "messages": [
                 {"role": "user", "content": prompt}
             ],
             "stream": False,
-            # 部分豆包模型支持联网搜索（需模型本身支持）
-            "tools": [{"type": "web_search"}] if _model_supports_search(use_model) else None
+            "tools": [{"type": "web_search"}]
         }
-        # 移除None值的tools字段
-        if payload["tools"] is None:
-            del payload["tools"]
 
         print(f"[豆包AI] 请求URL: {DOUBAO_API_URL}, model: {use_model}")
         resp = requests.post(DOUBAO_API_URL, headers=headers, json=payload, timeout=30)
@@ -807,22 +824,42 @@ def call_doubao_for_address(project_name, doubao_api_key, amap_key=None, model_i
     if not address:
         return None
 
+    # 【粤港澳大湾区校验】：确保 AI 返回的地址确实在大湾区内
+    in_gba = any(city in address for city in GBA_CITIES)
+    if not in_gba:
+        print(f"[豆包AI] 地址「{address}」未包含大湾区城市名，"
+              f"项目：{project_name} — 丢弃此AI结果")
+        return None
+
     result = {
         'address': address,
-        'confidence': 0.92,
+        'confidence': 0.90,
         'source': '豆包AI（智能搜索）',
         'raw_response': raw_text,
         'lng': None,
         'lat': None
     }
 
-    # 如果有高德Key，进行地理编码
+    # 如果有高德Key，进行地理编码（再次验证地址落在大湾区坐标范围内）
     if amap_key:
         geo = geocode_text_address(address, amap_key)
         if geo and geo.get('lng'):
-            result['lng'] = geo['lng']
-            result['lat'] = geo['lat']
-            result['geo_source'] = '高德地理编码'
+            try:
+                lng_f = float(geo['lng'])
+                lat_f = float(geo['lat'])
+                if (GBA_LNG_MIN <= lng_f <= GBA_LNG_MAX and
+                        GBA_LAT_MIN <= lat_f <= GBA_LAT_MAX):
+                    result['lng'] = geo['lng']
+                    result['lat'] = geo['lat']
+                    result['geo_source'] = '高德地理编码'
+                    # 成功地理编码并落在大湾区 → 置信度提升
+                    result['confidence'] = min(0.98, result['confidence'] + 0.06)
+                else:
+                    print(f"[豆包AI] 地理编码结果超出大湾区范围："
+                          f"{geo['lng']}, {geo['lat']}")
+                    # 坐标不可靠但地址是文本，仍保留地址，不写坐标
+            except (ValueError, TypeError):
+                pass
 
     return result
 
@@ -837,20 +874,45 @@ def _model_supports_search(model_id):
     return any(kw in model_lower for kw in search_supported_keywords)
 
 
+# 粤港澳大湾区覆盖的城市清单（用于搜索/地理编码限定）
+GBA_CITIES = [
+    "香港", "香港特别行政区",
+    "澳门", "澳门特别行政区",
+    "广州", "广州市",
+    "深圳", "深圳市",
+    "珠海", "珠海市",
+    "佛山", "佛山市",
+    "东莞", "东莞市",
+    "中山", "中山市",
+    "惠州", "惠州市",
+    "江门", "江门市",
+    "肇庆", "肇庆市",
+]
+# 大湾区经纬度有效范围：经度 111.0 ~ 115.5, 纬度 21.5 ~ 24.5
+GBA_LNG_MIN, GBA_LNG_MAX = 111.0, 115.5
+GBA_LAT_MIN, GBA_LAT_MAX = 21.5, 24.5
+
+
 def _clean_doubao_address(text):
-    """清理豆包返回的地址文本"""
-    import re
+    """清理豆包返回的地址文本 — 只做前缀/尾符清理，不破坏中文地址"""
     if not text:
         return None
-    # 去掉"申报地区："等前缀
-    text = re.sub(r"^(申报地区[：:]\s*|地址[：:]\s*|位于\s*|在\s*)", "", text)
-    # 去掉末尾的句号等
-    text = re.sub(r"[。，、；;,，\s]+$", "", text)
-    # 去掉可能的英文或特殊字符（保留中文地名）
-    text = re.sub(r"[a-zA-Z0-9_\-]{3,}", "", text)
+    # 去掉"申报地区：""地址："等前缀
+    text = re.sub(
+        r"^(申报地区[：:]\s*|申报地[：:]\s*|地址[：:]\s*|位于\s*|地处\s*|在\s*|坐落于\s*)",
+        "",
+        text,
+    )
+    # 去掉末尾多余的标点与空白（保留中文地址内部的标点）
+    text = re.sub(r"[。；;.!！?？\s]+$", "", text)
+    # 去掉多余空白（地址内部不应有多余换行或连续空格）
+    text = re.sub(r"\s+", "", text)
     text = text.strip()
-    # 长度校验：太少或太多都不是有效地址
-    if len(text) < 3 or len(text) > 50:
+    # 长度校验：一个有效地址至少 3 字，最多 60 字
+    if len(text) < 3 or len(text) > 60:
+        return None
+    # 过滤无效回答关键词
+    if any(k in text for k in ["不确定", "未知", "不清楚", "无法回答", "无相关信息"]):
         return None
     return text
 
@@ -3202,10 +3264,12 @@ def export_excel(task_id):
         export_data = []
         for item in task['items']:
             row = item.get('original_data', {}).copy()
+            row['项目名称'] = item.get('name', item.get('project_name', ''))
             row['确认地址'] = item.get('confirmed_address', '')
             row['经度'] = item.get('confirmed_longitude', '')
             row['纬度'] = item.get('confirmed_latitude', '')
-            row['处理状态'] = item.get('status', '')
+            row['AI 置信度'] = item.get('address_confidence', item.get('confidence', ''))
+            row['备注'] = item.get('note', '')
             export_data.append(row)
         
         df = pd.DataFrame(export_data)

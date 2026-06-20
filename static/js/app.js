@@ -2024,7 +2024,7 @@ async function searchWithAI(projectName) {
 
     const amapKey = elements.amapKey.value.trim();
 
-    showSearchLoading(true);
+    showSearchLoading('🤖 AI搜索中...');
     try {
         const resp = await fetch('/api/search_with_ai', {
             method: 'POST',
@@ -2037,10 +2037,9 @@ async function searchWithAI(projectName) {
             })
         });
         const data = await resp.json();
-        showSearchLoading(false);
+        hideSearchLoading();
 
         if (data.success) {
-            // 构造搜索结果格式，填入搜索结果区
             const aiResult = {
                 title: '🤖 豆包AI回答',
                 snippet: data.raw_response || data.address,
@@ -2052,14 +2051,21 @@ async function searchWithAI(projectName) {
                 is_ai: true
             };
             displayAISearchResult(aiResult);
-            showToast('AI搜索完成！', 'success');
+            // 自动填入地址 + 经纬度
+            const addrEl = document.getElementById('confirmed-address');
+            if (addrEl) addrEl.value = aiResult.address;
+            const lngEl = document.getElementById('confirmed-longitude');
+            const latEl = document.getElementById('confirmed-latitude');
+            if (lngEl && aiResult.lng) lngEl.value = aiResult.lng;
+            if (latEl && aiResult.lat) latEl.value = aiResult.lat;
+            showToast('AI搜索完成！已自动填入地址和坐标', 'success');
             return aiResult;
         } else {
             showToast('AI搜索失败：' + (data.message || '未知错误'), 'error');
             return null;
         }
     } catch (err) {
-        showSearchLoading(false);
+        hideSearchLoading();
         showToast('AI搜索请求失败：' + err.message, 'error');
         return null;
     }
@@ -2095,17 +2101,15 @@ function selectAISearchResult(aiResult) {
     const aiItem = document.querySelector('.ai-result');
     if (aiItem) aiItem.classList.add('selected');
 
-    // 填入确认地址输入框
-    document.getElementById('confirmed-address').value = aiResult.address;
+    // 填入确认地址 + 经纬度输入框
+    const addrEl = document.getElementById('confirmed-address');
+    if (addrEl) addrEl.value = aiResult.address;
+    const lngEl = document.getElementById('confirmed-longitude');
+    const latEl = document.getElementById('confirmed-latitude');
+    if (lngEl && aiResult.lng) lngEl.value = aiResult.lng;
+    if (latEl && aiResult.lat) latEl.value = aiResult.lat;
 
     showToast('已选择AI搜索结果，请确认地址后点击确认', 'info');
-}
-
-// 显示/隐藏搜索加载状态
-function showSearchLoading(show) {
-    if (elements.searchLoading) {
-        elements.searchLoading.style.display = show ? 'block' : 'none';
-    }
 }
 
 // 绑定AI搜索按钮事件
@@ -2122,6 +2126,18 @@ function bindAISearchButton() {
             if (!projectName) {
                 showToast('无法获取项目名称', 'error');
                 return;
+            }
+            // 基本的豆包 Key / model_id 校验
+            const doubaoKey = document.getElementById('doubao-key');
+            if (!doubaoKey || !doubaoKey.value.trim()) {
+                showToast('请先在配置页面填写豆包API Key', 'warning');
+                return;
+            }
+            const doubaoModelId = document.getElementById('doubao-model-id');
+            const modelIdVal = doubaoModelId ? doubaoModelId.value.trim() : '';
+            if (modelIdVal && !/^(ep|pp|ark|doubao)/i.test(modelIdVal)) {
+                // 只在有内容且明显不合规时提示一下，不强制 block
+                showToast('提示：接入点 ID 看起来不合规（通常以 ep- 开头）', 'warning');
             }
             await searchWithAI(projectName);
         });
