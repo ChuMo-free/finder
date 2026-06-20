@@ -9,80 +9,12 @@ import threading
 import time
 import json
 import re
-import concurrent.futures  # 用于给文件读取加超时保护
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-
-# ============ 文件读取的超时保护 ============
-# Excel 最大允许行数（超过时只读取前 MAX_EXCEL_ROWS 行，避免服务器卡死）
-MAX_EXCEL_ROWS = 50000
-# 每次读取 Excel 的最大等待秒数（超过则判定为卡死/格式异常）
-EXCEL_READ_TIMEOUT_SEC = 90
-
-
-def _safe_read_excel(filepath, limit_rows=MAX_EXCEL_ROWS):
-    """
-    安全地读取 Excel 文件：
-      - 限制最大读取行数
-      - 对 openpyxl 的卡死/格式异常给出明确错误信息
-    返回 (DataFrame, None) 或 (None, error_message)
-    """
-    try:
-        # 先尝试只读列名 + 读取总行数，避免一次性加载大文件
-        try:
-            preview = pd.read_excel(filepath, engine='openpyxl', nrows=0)
-            total_cols = len(preview.columns)
-        except Exception:
-            total_cols = None
-
-        # 读取实际数据（限制行数）
-        df = pd.read_excel(filepath, engine='openpyxl', nrows=limit_rows)
-
-        if df is None or len(df) == 0:
-            return None, "Excel 文件为空或没有可读行"
-
-        # 清理空列名（有些 Excel 会产生 "Unnamed: X"）
-        cols = []
-        for i, c in enumerate(df.columns):
-            if isinstance(c, str) and c.startswith('Unnamed'):
-                cols.append(f'列{i+1}')
-            else:
-                cols.append(str(c))
-        df.columns = cols
-
-        return df, None
-
-    except MemoryError:
-        return None, "文件过大，服务器内存不足"
-    except Exception as e:
-        msg = str(e)
-        if 'Unsupported format' in msg or 'not a zip file' in msg or 'File is not a zip file' in msg:
-            return None, "文件格式不正确：不是有效的 .xlsx 文件（可能是 .xls 旧格式或已损坏）"
-        return None, f"读取 Excel 失败：{msg}"
-
-
-def read_excel_with_timeout(filepath, limit_rows=MAX_EXCEL_ROWS, timeout_sec=EXCEL_READ_TIMEOUT_SEC):
-    """
-    在独立线程中读取 Excel，超过 timeout_sec 则判定卡死并返回错误
-    这样避免 Flask 主线程被 openpyxl 阻塞
-    """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_safe_read_excel, filepath, limit_rows)
-        try:
-            df, err = future.result(timeout=timeout_sec)
-            return df, err
-        except concurrent.futures.TimeoutError:
-            # 读取超时，强制取消线程（best effort）
-            try:
-                future.cancel()
-            except Exception:
-                pass
-            return None, f"读取 Excel 超时（>{timeout_sec} 秒），文件可能过大、格式异常或服务器繁忙"
-
 
 # ==================== AI模型配置（豆包） ====================
 # 豆包API配置 - API Key可从前端传入，也可在这里填写默认值
@@ -2862,18 +2794,12 @@ def upload_file():
         task_id = generate_task_id()
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], f'{task_id}_{filename}')
         file.save(filepath)
-
+        
         try:
-            # 【关键修复】带超时保护地读取 Excel，避免服务器卡死
-            print(f'[上传] 正在读取文件: {filename} ({os.path.getsize(filepath) // 1024} KB)')
-            df, err = read_excel_with_timeout(filepath)
-            if err:
-                print(f'[上传] Excel 读取失败: {err}')
-                return jsonify({'success': False, 'message': err}), 400
-
+            # 读取Excel获取列名
+            df = pd.read_excel(filepath, engine='openpyxl')
             columns = df.columns.tolist()
             row_count = len(df)
-            print(f'[上传] 读取成功: {row_count} 行, {len(columns)} 列')
             
             # 创建任务
             with tasks_lock:
@@ -2937,11 +2863,9 @@ def set_field_mapping():
         return jsonify({'success': False, 'message': '任务不存在'}), 404
     
     try:
-        # 【关键修复】带超时保护地读取 Excel
-        df, err = read_excel_with_timeout(task['filepath'])
-        if err:
-            return jsonify({'success': False, 'message': err}), 400
-
+        # 读取Excel数据
+        df = pd.read_excel(task['filepath'], engine='openpyxl')
+        
         # 根据映射提取数据
         items = []
         name_field = field_mapping.get('name', '')
