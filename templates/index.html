@@ -88,25 +88,20 @@
 
             <div class="mapping-section">
                 <h3>搜索范围设置</h3>
-                <p class="section-desc">选择搜索省份，提高地址搜索准确度（可多选）</p>
-                
+                <p class="section-desc">已固定在粤港澳大湾区，提高非遗项目地址搜索准确度</p>
+
                 <div class="form-group">
-                    <label for="province-select">限定搜索省份</label>
-                    <div class="province-selector" id="province-selector">
-                        <div class="province-search-box">
-                            <input type="text" id="province-search" class="province-search-input" 
-                                   placeholder="搜索省份..." aria-label="搜索省份">
-                            <div class="province-checkboxes" id="province-checkboxes" role="group" aria-label="省份选择">
-                                <!-- 省份复选框将通过JS动态生成 -->
-                            </div>
-                        </div>
-                        <div class="province-selected" id="province-selected">
-                            <span class="province-selected-label">已选择：</span>
-                            <span class="province-tags" id="province-tags"></span>
-                            <button class="btn btn-text btn-small" id="btn-clear-provinces" type="button" style="display:none;">清空</button>
-                        </div>
+                    <label>搜索范围</label>
+                    <div class="gba-badge-wrap">
+                        <span class="gba-badge">
+                            <span class="gba-icon" aria-hidden="true">🌏</span>
+                            <span class="gba-name">粤港澳大湾区</span>
+                        </span>
+                        <span class="gba-city-list">
+                            香港 · 澳门 · 广州 · 深圳 · 珠海 · 佛山 · 东莞 · 中山 · 惠州 · 江门 · 肇庆
+                        </span>
                     </div>
-                    <span class="field-hint">💡 不选择则搜索全国范围；选择后可大幅提高地址匹配准确度</span>
+                    <span class="field-hint">💡 所有搜索（AI / 网页 / 高德地点）均已自动限定在大湾区范围内</span>
                 </div>
             </div>
 
