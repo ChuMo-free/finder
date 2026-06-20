@@ -634,9 +634,11 @@ function handleFile(file) {
 
 function uploadWithProgress(formData, progressFill, progressText) {
     const xhr = new XMLHttpRequest();
+    // 保存 xhr 引用，便于用户取消
+    window._uploadXHR = xhr;
 
-    // 设置超时：120秒（给服务器足够时间读取大Excel）
-    xhr.timeout = 120000;
+    // 延长超时到 5 分钟（300秒），给服务器足够时间读取大 Excel
+    xhr.timeout = 300000;
 
     xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable) {
@@ -646,14 +648,34 @@ function uploadWithProgress(formData, progressFill, progressText) {
         }
     });
 
-    // ★ 上传完成后（100%），切换为"等待服务器"状态
+    // 上传完成后（100%），切换为"等待服务器"状态
     xhr.upload.addEventListener('load', () => {
         if (progressFill) progressFill.style.width = '100%';
-        if (progressText) progressText.textContent = '⏳ 服务器处理中，请稍候...';
+        // 显示更明确的提示：文件已传到服务器，正在解析 Excel
+        if (progressText) {
+            progressText.textContent = '✅ 文件已上传，正在解析 Excel（约 10-30 秒），请勿关闭页面...';
+            progressText.style.fontWeight = '600';
+        }
+        // 添加取消按钮（让用户有退路）
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'btn btn-text btn-small';
+        cancelBtn.textContent = '取消上传';
+        cancelBtn.style.marginTop = '8px';
+        cancelBtn.type = 'button';
+        cancelBtn.addEventListener('click', () => {
+            try { xhr.abort(); } catch (e) {}
+            showToast('已取消上传', 'info');
+            resetUploadArea();
+        });
+        // 插入到 progress-text 附近（如果 progress-text 有父元素）
+        if (progressText && progressText.parentNode) {
+            progressText.parentNode.appendChild(cancelBtn);
+        }
     });
 
     xhr.addEventListener('load', () => {
-        // 隐藏进度条
+        // 清理取消按钮引用
+        window._uploadXHR = null;
         const progressEl = document.getElementById('upload-progress');
         if (progressEl) progressEl.style.display = 'none';
 
@@ -664,19 +686,28 @@ function uploadWithProgress(formData, progressFill, progressText) {
                 const file = formData.get('file');
                 handleUploadResponse(data, file);
             } catch (e) {
-                console.error('[上传] 解析响应失败:', e, xhr.responseText);
-                showToast('服务器响应异常，请重试', 'error');
+                // 响应不是合法 JSON —— 可能返回了 Flask 的 HTML 错误页
+                console.error('[上传] 解析响应失败:', e, '原始响应:', xhr.responseText);
+                const firstLine = (xhr.responseText || '').substring(0, 200).replace(/<[^>]*>/g, '');
+                showToast(`服务器返回异常，请重试（${firstLine || '未知错误'}）`, 'error');
                 resetUploadArea();
             }
         } else {
             console.error('[上传] HTTP错误:', xhr.status, xhr.responseText);
-            showToast(`上传失败（HTTP ${xhr.status}）`, 'error');
+            let msg = `上传失败（HTTP ${xhr.status}）`;
+            // 尝试解析后端的 JSON 错误信息
+            try {
+                const data = JSON.parse(xhr.responseText);
+                if (data && data.message) msg = data.message;
+            } catch (e) {}
+            showToast(msg, 'error');
             resetUploadArea();
         }
     });
 
     xhr.addEventListener('error', () => {
         console.error('[上传] 网络错误');
+        window._uploadXHR = null;
         const progressEl = document.getElementById('upload-progress');
         if (progressEl) progressEl.style.display = 'none';
         showToast('网络错误，请检查连接后重试', 'error');
@@ -685,10 +716,11 @@ function uploadWithProgress(formData, progressFill, progressText) {
 
     // ★ 超时处理
     xhr.addEventListener('timeout', () => {
-        console.error('[上传] 请求超时(120s)');
+        console.error('[上传] 请求超时(300s)');
+        window._uploadXHR = null;
         const progressEl = document.getElementById('upload-progress');
         if (progressEl) progressEl.style.display = 'none';
-        showToast('请求超时，文件可能过大或服务器无响应，请重试', 'error');
+        showToast('请求超时，文件可能过大，请分批处理或重试', 'error');
         resetUploadArea();
     });
 
@@ -851,11 +883,25 @@ function startTask() {
     }
     
     state.amapKey = amapKey;
-    
+
+    // 添加"正在加载中"的提示，避免用户以为卡死
+    const originalBtn = document.getElementById('btn-start-task');
+    let btnOriginalText = '';
+    if (originalBtn) {
+        btnOriginalText = originalBtn.textContent;
+        originalBtn.disabled = true;
+        originalBtn.textContent = '⏳ 正在解析数据，请稍候...';
+    }
+
+    // 超时控制器：5 分钟超时（给大 Excel 足够时间）
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000);
+
     // 设置字段映射
     fetch('/api/field-mapping', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
             task_id: state.taskId,
             field_mapping: { name: nameField },
@@ -864,10 +910,14 @@ function startTask() {
             doubao_model_id: doubaoModelId || undefined,
             auto_mode: state.autoMode,
             mode: state.mode,
-            provinces: state.selectedProvinces   // 省份筛选列表（空数组=不限定）
+            provinces: state.selectedProvinces
         })
     })
-    .then(response => response.json())
+    .then(response => {
+        clearTimeout(timeoutId);
+        if (!response.ok) throw new Error(`服务器响应 ${response.status}`);
+        return response.json();
+    })
     .then(data => {
         if (data.success) {
             // 启动任务
@@ -875,22 +925,36 @@ function startTask() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ task_id: state.taskId })
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    if (originalBtn) {
+                        originalBtn.disabled = false;
+                        originalBtn.textContent = btnOriginalText;
+                    }
+                    goToStep(3);
+                    startStatusPolling();
+                    showToast('任务已启动', 'success');
+                } else {
+                    throw new Error(d.message || '启动失败');
+                }
             });
         } else {
-            throw new Error(data.message);
+            throw new Error(data.message || '字段映射失败');
         }
     })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            goToStep(3);
-            startStatusPolling();
+    .catch(err => {
+        clearTimeout(timeoutId);
+        if (originalBtn) {
+            originalBtn.disabled = false;
+            originalBtn.textContent = btnOriginalText;
+        }
+        if (err.name === 'AbortError') {
+            showToast('请求超时，文件可能过大，请分批处理', 'error');
         } else {
-            throw new Error(data.message);
+            showToast('操作失败：' + (err.message || '未知错误'), 'error');
         }
-    })
-    .catch(error => {
-        showToast('启动任务失败: ' + error.message, 'error');
     });
 }
 
